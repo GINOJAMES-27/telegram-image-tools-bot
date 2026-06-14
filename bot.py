@@ -14,8 +14,8 @@ from telegram.ext import (
 from PIL import Image
 import os
 import img2pdf
-# Imported for the PDF merging capability
-from pypdf import PdfMerger
+# Changed import to use modern pypdf syntax
+from pypdf import PdfWriter
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -26,7 +26,6 @@ os.makedirs("outputs", exist_ok=True)
 user_state = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Added Merge PDFs button to the startup menu
     keyboard = [
         [InlineKeyboardButton("🖼 Image Conversion", callback_data="convert")],
         [InlineKeyboardButton("🗜 Image Compressor", callback_data="compress")],
@@ -152,10 +151,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         merged_path = f"outputs/{user_id}_merged.pdf"
         try:
-            merger = PdfMerger()
+            # Replaced PdfMerger() with modern PdfWriter() implementation
+            merger = PdfWriter()
             for pdf in pdfs:
                 merger.append(pdf)
             
+            # PdfWriter writes to a destination file path directly
             merger.write(merged_path)
             merger.close()
 
@@ -191,7 +192,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output_path = None
 
     try:
-        # PDF MODE
         if action == "pdf":
             await photo_file.download_to_drive(input_path)
             user_data["images"].append(input_path)
@@ -242,7 +242,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if output_path and os.path.exists(output_path):
                 os.remove(output_path)
 
-# Dedicated handler to manage incoming PDF documents
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_id = update.message.message_id
@@ -257,7 +256,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "merge_pdf":
         doc = update.message.document
         
-        # Ensure the uploaded document is actually a PDF file
         if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith('.pdf'):
             await update.message.reply_text("❌ Please upload a valid PDF document.")
             return
@@ -284,7 +282,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    # Registers the document handler to watch for inbound PDF transfers
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
 
     print("Bot running...")
