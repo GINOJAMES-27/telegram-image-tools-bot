@@ -14,6 +14,8 @@ from telegram.ext import (
 from PIL import Image
 import os
 import img2pdf
+# Imported for the PDF merging capability
+from pypdf import PdfMerger
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -24,11 +26,12 @@ os.makedirs("outputs", exist_ok=True)
 user_state = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Removed the resize button from the menu list
+    # Added Merge PDFs button to the startup menu
     keyboard = [
         [InlineKeyboardButton("🖼 Image Conversion", callback_data="convert")],
         [InlineKeyboardButton("🗜 Image Compressor", callback_data="compress")],
-        [InlineKeyboardButton("📄 Image to PDF", callback_data="pdf")]
+        [InlineKeyboardButton("📄 Image to PDF", callback_data="pdf")],
+        [InlineKeyboardButton("🧩 Merge PDFs", callback_data="merge_pdf_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -123,6 +126,53 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     os.remove(image)
             user_state.pop(user_id, None)
 
+    # MERGE PDFs MENU
+    elif query.data == "merge_pdf_menu":
+        user_state[user_id] = {
+            "action": "merge_pdf",
+            "pdfs": []
+        }
+        keyboard = [[InlineKeyboardButton("🧩 Merge PDFs", callback_data="execute_merge")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "📄 Upload PDF files one by one.\n\nWhen finished click Merge PDFs.",
+            reply_markup=reply_markup
+        )
+
+    # EXECUTE PDF MERGER
+    elif query.data == "execute_merge":
+        if user_id not in user_state or user_state[user_id]["action"] != "merge_pdf":
+            await query.message.reply_text("No active Merge session found. Start over.")
+            return
+
+        pdfs = user_state[user_id]["pdfs"]
+        if len(pdfs) < 2:
+            await query.message.reply_text("Please upload at least two PDF files to merge.")
+            return
+
+        merged_path = f"outputs/{user_id}_merged.pdf"
+        try:
+            merger = PdfMerger()
+            for pdf in pdfs:
+                merger.append(pdf)
+            
+            merger.write(merged_path)
+            merger.close()
+
+            with open(merged_path, "rb") as pdf_file:
+                await query.message.reply_document(document=pdf_file)
+            
+            await query.message.reply_text("✅ PDFs merged successfully.")
+        except Exception as e:
+            await query.message.reply_text(f"Error merging PDFs: {str(e)}")
+        finally:
+            if os.path.exists(merged_path):
+                os.remove(merged_path)
+            for pdf in pdfs:
+                if os.path.exists(pdf):
+                    os.remove(pdf)
+            user_state.pop(user_id, None)
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_id = update.message.message_id
@@ -192,12 +242,50 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if output_path and os.path.exists(output_path):
                 os.remove(output_path)
 
+# Dedicated handler to manage incoming PDF documents
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    message_id = update.message.message_id
+
+    if user_id not in user_state:
+        await update.message.reply_text("Please select a tool first.")
+        return
+
+    user_data = user_state[user_id]
+    action = user_data["action"]
+
+    if action == "merge_pdf":
+        doc = update.message.document
+        
+        # Ensure the uploaded document is actually a PDF file
+        if doc.mime_type != "application/pdf" and not doc.file_name.lower().endswith('.pdf'):
+            await update.message.reply_text("❌ Please upload a valid PDF document.")
+            return
+
+        pdf_file = await doc.get_file()
+        input_path = f"uploads/{user_id}_{message_id}.pdf"
+        
+        try:
+            await pdf_file.download_to_drive(input_path)
+            user_data["pdfs"].append(input_path)
+            pdf_count = len(user_data["pdfs"])
+
+            await update.message.reply_text(
+                f"✅ PDF {pdf_count} added.\n"
+                f"Current PDFs: {pdf_count}\n\n"
+                f"Upload more PDFs or click the 'Merge PDFs' button above."
+            )
+        except Exception as e:
+            await update.message.reply_text(f"Error saving PDF: {str(e)}")
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Registers the document handler to watch for inbound PDF transfers
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
 
     print("Bot running...")
     app.run_polling()
